@@ -139,6 +139,7 @@ static int mongo_check_is_master( mongo *conn ) {
     if ( mongo_simple_int_command( conn, "admin", "ismaster", 1, &out ) == MONGO_OK ) {
         if( bson_find( &it, &out, "ismaster" ) )
             ismaster = bson_iterator_bool( &it );
+            conn->ismaster = ismaster;
     } else {
         return MONGO_ERROR;
     }
@@ -164,7 +165,7 @@ void mongo_init( mongo *conn ) {
     conn->op_timeout_ms = 0;
 }
 
-int mongo_connect( mongo *conn , const char *host, int port ) {
+int mongo_connect( mongo *conn , const char *host, int port, int option ) {
     conn->primary = bson_malloc( sizeof( mongo_host_port ) );
     strncpy( conn->primary->host, host, strlen( host ) + 1 );
     conn->primary->port = port;
@@ -174,7 +175,7 @@ int mongo_connect( mongo *conn , const char *host, int port ) {
     if( mongo_socket_connect( conn, host, port ) != MONGO_OK )
         return MONGO_ERROR;
 
-    if( mongo_check_is_master( conn ) != MONGO_OK )
+    if( option == MONGO_PRIMARY_ONLY && mongo_check_is_master( conn ) != MONGO_OK )
         return MONGO_ERROR;
     else
         return MONGO_OK;
@@ -312,6 +313,7 @@ static int mongo_replset_check_host( mongo *conn ) {
     if ( mongo_simple_int_command( conn, "admin", "ismaster", 1, &out ) == MONGO_OK ) {
         if( bson_find( &it, &out, "ismaster" ) )
             ismaster = bson_iterator_bool( &it );
+            conn->ismaster = ismaster;
 
         if( bson_find( &it, &out, "setName" ) ) {
             set_name = bson_iterator_string( &it );
@@ -334,7 +336,7 @@ static int mongo_replset_check_host( mongo *conn ) {
     return MONGO_OK;
 }
 
-int mongo_replset_connect( mongo *conn ) {
+int mongo_replset_connect( mongo *conn, int option ) {
 
     int res = 0;
     mongo_host_port *node;
@@ -372,16 +374,20 @@ int mongo_replset_connect( mongo *conn ) {
             if( res == MONGO_OK ) {
                 if( mongo_replset_check_host( conn ) != MONGO_OK )
                     return MONGO_ERROR;
-
-                /* Primary found, so return. */
-                else if( conn->replset->primary_connected )
-                    return MONGO_OK;
-
-                /* No primary, so close the connection. */
                 else {
-                    mongo_close_socket( conn->sock );
-                    conn->sock = 0;
-                    conn->connected = 0;
+                    if ( option == MONGO_SECONDARY_OK )
+                        return MONGO_OK;
+
+                    /* Primary found, so return. */
+                    if( conn->replset->primary_connected )
+                        return MONGO_OK;
+
+                    /* No primary, so close the connection. */
+                    else {
+                        mongo_close_socket( conn->sock );
+                        conn->sock = 0;
+                        conn->connected = 0;
+                    }
                 }
             }
 
@@ -402,7 +408,7 @@ int mongo_set_op_timeout( mongo *conn, int millis ) {
     return MONGO_OK;
 }
 
-int mongo_reconnect( mongo *conn ) {
+int mongo_reconnect( mongo *conn, int option ) {
     int res;
     mongo_disconnect( conn );
 
@@ -410,7 +416,7 @@ int mongo_reconnect( mongo *conn ) {
         conn->replset->primary_connected = 0;
         mongo_replset_free_list( &conn->replset->hosts );
         conn->replset->hosts = NULL;
-        res = mongo_replset_connect( conn );
+        res = mongo_replset_connect( conn, option );
         return res;
     } else
         return mongo_socket_connect( conn, conn->primary->host, conn->primary->port );
@@ -731,6 +737,7 @@ mongo_cursor *mongo_find( mongo *conn, const char *ns, bson *query,
     mongo_cursor_set_fields( cursor, fields );
     mongo_cursor_set_limit( cursor, limit );
     mongo_cursor_set_skip( cursor, skip );
+    if ( !conn->ismaster ) options |= MONGO_SLAVE_OK;
     mongo_cursor_set_options( cursor, options );
 
     if( mongo_cursor_op_query( cursor ) == MONGO_OK )
@@ -1102,6 +1109,7 @@ bson_bool_t mongo_cmd_ismaster( mongo *conn, bson *realout ) {
         bson_iterator it;
         bson_find( &it, &out, "ismaster" );
         ismaster = bson_iterator_bool( &it );
+        conn->ismaster = ismaster;
     }
 
     if( realout )

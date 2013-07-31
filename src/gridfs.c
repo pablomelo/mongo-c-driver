@@ -43,7 +43,7 @@ int gridfs_init( mongo *client, const char *dbname, const char *prefix,
 
     int options;
     bson b;
-    bson_bool_t success;
+    bson_bool_t success = 1;
 
     gfs->client = client;
 
@@ -76,7 +76,9 @@ int gridfs_init( mongo *client, const char *dbname, const char *prefix,
     bson_append_int( &b, "filename", 1 );
     bson_finish( &b );
     options = 0;
-    success = ( mongo_create_index( gfs->client, gfs->files_ns, &b, options, NULL ) == MONGO_OK );
+    // if not primary/master then ignore
+    if ( gfs->client->ismaster )
+        success = ( mongo_create_index( gfs->client, gfs->files_ns, &b, options, NULL ) == MONGO_OK );
     bson_destroy( &b );
     if ( !success ) {
         bson_free( ( char * )gfs->dbname );
@@ -91,7 +93,9 @@ int gridfs_init( mongo *client, const char *dbname, const char *prefix,
     bson_append_int( &b, "n", 1 );
     bson_finish( &b );
     options = MONGO_INDEX_UNIQUE;
-    success = ( mongo_create_index( gfs->client, gfs->chunks_ns, &b, options, NULL ) == MONGO_OK );
+    // if not primary/master then ignore
+    if ( gfs->client->ismaster )
+        success = ( mongo_create_index( gfs->client, gfs->chunks_ns, &b, options, NULL ) == MONGO_OK );
     bson_destroy( &b );
     if ( !success ) {
         bson_free( ( char * )gfs->dbname );
